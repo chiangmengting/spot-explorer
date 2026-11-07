@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64
+    container_name: spot-explorer-db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: spot_explorer
+      POSTGRES_USER: spot_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U spot_user -d spot_explorer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  init:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: db
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SEED_CSV_PATH: /app/data/landit_coding_test_seed.csv
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        pnpm exec tsx ./node_modules/typeorm/cli.js migration:run -d src/database/data-source.ts &&
+        pnpm exec tsx src/database/seeds/seed.ts
+    restart: "no"
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: spot-explorer-api
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      DB_HOST: db
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      NOMINATIM_USER_AGENT: ${NOMINATIM_USER_AGENT}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        API_INTERNAL_URL: http://api:3000
+    container_name: spot-explorer-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+volumes:
+  postgres_data:
